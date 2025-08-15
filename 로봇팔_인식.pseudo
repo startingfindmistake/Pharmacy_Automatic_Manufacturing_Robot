@@ -1,0 +1,79 @@
+// --- 사전 설정 (Pre-Configuration) ---
+// 필요한 인터페이스 및 '정답' 모델 데이터 미리 로드
+
+Define tof_camera = ToF_Camera_Interface()
+Define shape_matcher = Shape_Matcher_Engine()
+Define icp_matcher = ICP_Engine()
+
+// '정답'이 되는 2D 모양과 3D 모델을 메모리에 로드
+shape_matcher.Load_2D_Model(file="canister_edge_model.mdl")
+icp_matcher.Load_3D_Model(file="canister_cad_model.stl")
+
+// 사전에 계산된 Hand-Eye 캘리브레이션 행렬 로드
+Define hand_eye_calibration_matrix = Load_File("hand_eye_calib.txt")
+
+
+// --- 메인 인식 함수 (Main Perception Function) ---
+// 이 함수는 호출될 때마다 캐니스터 1개를 찾아 로봇 기준 3D 좌표를 반환
+Function Find_Canister_in_Robot_Space()
+
+    // 1. 데이터 획득 (Data Acquisition)
+    //-------------------------------------------------
+    Print("1. ToF 카메라로부터 데이터 프레임 획득")
+    [image_2d, point_cloud_3d] = tof_camera.Capture()
+
+    IF Capture FAILED THEN
+        Print("오류: 카메라로부터 데이터를 얻을 수 없습니다.")
+        Return FAILURE, NULL // 실패 및 null 값 반환
+    END IF
+
+    // 2. 2D 위치 탐지 (2D Location Detection)
+    //-------------------------------------------------
+    Print("2. 형상 기반 매칭으로 2D 이미지에서 캐니스터 탐색")
+    // 결과: 탐지된 위치(ROI), 2D 회전각, 매칭 점수
+    [detected_roi, detected_angle, matching_score] = shape_matcher.Find(image_2d)
+
+    // 2-1. 탐지 성공 여부 확인
+    IF matching_score < 80.0 THEN // 예시: 매칭 점수가 80점 미만이면 실패로 간주
+        Print("오류: 2D 이미지에서 캐니스터를 명확히 찾지 못했습니다.")
+        Return FAILURE, NULL
+    END IF
+    Print("2D 위치 탐지 성공!")
+
+    // 3. 3D 자세 계산 (3D Pose Estimation)
+    //-------------------------------------------------
+    Print("3. 3D 포인트 클라우드 처리 및 자세 계산")
+    
+    // 3-1. 관심 영역(ROI)의 3D 데이터만 추출
+    target_point_cloud = Extract_Cloud_from_ROI(point_cloud_3d, detected_roi)
+
+    // 3-2. 노이즈 필터링 (현실 문제 해결책)
+    cleaned_point_cloud = Statistical_Outlier_Removal(target_point_cloud)
+
+    IF cleaned_cloud is EMPTY THEN
+        Print("오류: 해당 영역에 유효한 3D 데이터가 없습니다.")
+        Return FAILURE, NULL
+    END IF
+
+    // 3-3. 3D 모델 정합 (ICP)
+    Print("3D 모델 정합(ICP)으로 정밀 자세 계산 중...")
+    [icp_success, pose_in_camera] = icp_matcher.Calculate_Pose(cleaned_point_cloud)
+
+    IF icp_success is FALSE THEN
+        Print("오류: 3D 모델 정합에 실패했습니다.")
+        Return FAILURE, NULL
+    END IF
+    Print("카메라 기준 3D 자세 계산 성공!")
+
+    // 4. 좌표계 변환 (Coordinate Transformation)
+    //-------------------------------------------------
+    Print("4. 카메라 좌표를 로봇 좌표계로 변환")
+    final_pose_for_robot = Transform_Pose(pose_in_camera, hand_eye_calibration_matrix)
+
+
+    // 5. 최종 결과 반환
+    //-------------------------------------------------
+    Print("인식 성공! 로봇이 사용할 최종 자세 정보 반환")
+    Return SUCCESS, final_pose_for_robot
+
+END Function
