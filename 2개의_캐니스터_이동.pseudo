@@ -1,0 +1,57 @@
+// 2개의 캐니스터가 포함된 처방 목록을 받아 효율적으로 이송하는 메인 함수
+
+FUNCTION process_dual_canister_order_efficiently(order_list):
+
+    // --- 초기 설정 ---
+    IF order_list.count != 2 THEN
+        report_error("이 로직은 2개의 캐니스터 처리에 최적화되어 있습니다.")
+        RETURN "FAILED"
+    END IF
+
+    canister1_id = order_list[0].id
+    canister2_id = order_list[1].id
+    destination_box_id = order_list[0].destination_box_id
+
+    // 임시 보관함이 비어있는지 확인
+    IF TempBin.is_empty() == FALSE THEN
+        report_error("임시 보관함이 비어있지 않아 작업을 시작할 수 없습니다.")
+        RETURN "FAILED"
+    END IF
+
+    // --- 1단계: 첫 번째 캐니스터를 임시 보관함으로 이동 ---
+    PRINT("1단계 시작: " + canister1_id + " -> 임시 보관함")
+    // 판단: '캐니스터1 -> 임시 보관함' 경로 조회
+    path1 = database.lookup_path(from=canister1_id, to="TempBin")
+    // 제어 & 인지: 경로 실행 및 파지 확인 (이전 함수 재사용)
+    success = execute_single_transport(path1)
+    IF success == FALSE THEN RETURN "FAILED" END IF
+    // 상태 업데이트: 임시 보관함에 캐니스터1이 있음을 기록
+    TempBin.set_content(canister1_id)
+
+    // --- 2단계: 두 번째 캐니스터를 집어 최종 목적지로 이동 및 배치 ---
+    PRINT("2단계 시작: " + canister2_id + " -> " + destination_box_id)
+    // 판단: '캐니스터2 -> 처방 보관함' 경로 조회
+    path2 = database.lookup_path(from=canister2_id, to=destination_box_id)
+    // 제어 & 인지: '픽업' 부분만 실행
+    success = execute_pickup_part(path2)
+    IF success == FALSE THEN RETURN "FAILED" END IF
+    // 제어: '배치' 부분 실행 (레일의 장거리 이동 발생)
+    controller.execute_trajectory(path2.to_destination)
+    gripper.open()
+
+    // --- 3단계: 임시 보관함의 캐니스터를 최종 목적지에 배치 ---
+    PRINT("3단계 시작: 임시 보관함 -> " + destination_box_id)
+    // 판단: '임시 보관함 -> 처방 보관함' 경로 조회
+    path3 = database.lookup_path(from="TempBin", to=destination_box_id)
+    // 제어 & 인지: 경로 실행 및 파지 확인
+    success = execute_single_transport(path3)
+    IF success == FALSE THEN RETURN "FAILED" END IF
+    // 상태 업데이트: 임시 보관함이 비었음을 기록
+    TempBin.set_empty()
+    
+    // --- 4단계: 작업 완료 및 원점 복귀 ---
+    PRINT("모든 작업 완료. 원점으로 복귀합니다.")
+    controller.move_to_home_position()
+    RETURN "SUCCESS"
+
+END FUNCTION

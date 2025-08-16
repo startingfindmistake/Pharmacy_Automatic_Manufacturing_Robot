@@ -1,0 +1,20 @@
+// 캐니스터가 보관함의 특정 슬롯에 물리적으로 장착될 때 슬롯의 센서에 단 한번 호출됩니다.
+
+
+// 슬롯에 캐니스터가 장착될 때 실행되는 이벤트 핸들러
+FUNCTION on_canister_attached(slot_id, canister_id):
+
+    // 1. 상태 업데이트: 캐니스터의 현재 상태를 '대기 중'으로 변경
+    canister_status = "대기 중"
+    
+    // 2. 위치 정보 기록: 어떤 슬롯에 장착되었는지 위치 정보를 기록
+    canister_location = slot_id
+
+    // 3. 데이터베이스 업데이트: 변경된 상태와 위치 정보를 중앙 DB에 저장
+    database.update_canister(canister_id, {
+        status: canister_status,
+        location: canister_location
+    })
+
+    // 4. 로그 기록: 시스템 로그에 장착 이벤트 기록
+    log("캐니스터 " + canister_id + "가 슬롯 " + slot_id + "에 장착됨. 현재 상태: 대기 중")
