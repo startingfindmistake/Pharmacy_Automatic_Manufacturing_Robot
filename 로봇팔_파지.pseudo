@@ -1,0 +1,90 @@
+// --- 사전 설정 (Pre-Configuration) ---
+Define robot_arm = MoveIt2_Control_Interface()
+Define gripper = Gripper_Control_Interface()
+
+
+// --- 메인 파지 함수 (Main Grasping Function) ---
+// 입력: 인식 단계에서 계산된 'target_grasp_pose' (캐니스터의 최종 파지 자세)
+Function Execute_Grasping_Sequence(target_grasp_pose)
+
+    // 1. 파지 관련 경로 계산
+    //-------------------------------------------------
+    Print("1. 접근(Approach) 및 후퇴(Retreat) 경로 계산")
+    
+    // 파지점 바로 위 10cm 지점을 '사전 파지 위치'로 설정
+    pre_grasp_pose = Calculate_Offset_Pose(target_grasp_pose, offset_z=0.10) 
+    
+    // 파지 후 들어 올릴 위치 설정 (동일하게 10cm 위)
+    lift_pose = pre_grasp_pose 
+
+
+    // 2. 사전 파지 위치로 이동 (Approach to Pre-Grasp)
+    //-------------------------------------------------
+    Print("2. 사전 파지 위치(Pre-Grasp Pose)로 이동")
+    [success, trajectory] = robot_arm.Plan_to_Pose(pre_grasp_pose)
+    IF success is FALSE THEN
+        Print("오류: 사전 파지 위치로의 경로 계획 실패")
+        Return FAILURE
+    END IF
+    robot_arm.Execute_Trajectory(trajectory)
+    
+    // 3. 직선 접근 (Linear Approach)
+    //-------------------------------------------------
+    Print("3. 목표 파지점까지 직선으로 접근")
+    [success, linear_trajectory] = robot_arm.Plan_Cartesian_Path(start=pre_grasp_pose, end=target_grasp_pose)
+    IF success is FALSE THEN
+        Print("오류: 직선 접근 경로 계산 실패")
+        Return FAILURE
+    END IF
+    robot_arm.Execute_Trajectory(linear_trajectory)
+
+    // 4. 그리퍼 작동 및 파지 성공 확인 (Grasp & Confirmation)
+    //-------------------------------------------------
+    Print("4. 그리퍼를 닫고 파지 성공 여부 확인")
+    gripper.Close()
+    Sleep(1.0s) // 그리퍼가 완전히 닫힐 때까지 잠시 대기
+    
+    // [핵심] 파지 성공 확인 로직
+    IF gripper.Is_Grasp_Successful() is FALSE THEN
+        Print("오류: 파지 실패! (물체를 놓쳤거나 헛잡음)")
+        gripper.Open() // 그리퍼 다시 열기
+        robot_arm.Move_Linearly_To(pre_grasp_pose) // 안전한 위치로 후퇴
+        Return FAILURE
+    END IF
+    Print("파지 성공 확인 완료!")
+    
+    // 5. 수직 후퇴 (Vertical Retreat / Lift)
+    //-------------------------------------------------
+    Print("5. 캐니스터를 수직으로 들어 올리기")
+    [success, lift_trajectory] = robot_arm.Plan_Cartesian_Path(start=target_grasp_pose, end=lift_pose)
+    IF success is FALSE THEN
+        Print("오류: 수직 후퇴 경로 계산 실패")
+        // 이미 물건을 잡고 있으므로 심각한 오류 처리 필요
+        Return CRITICAL_FAILURE 
+    END IF
+    robot_arm.Execute_Trajectory(lift_trajectory)
+    
+    Print("파지 시퀀스 성공적으로 완료!")
+    Return SUCCESS
+
+END Function
+
+
+// --- 그리퍼 성공 확인 보조 함수 ---
+Function Is_Grasp_Successful() in gripper
+
+    // 방법 1: 그리퍼 너비 확인 (가장 일반적)
+    current_width = gripper.Get_Current_Width()
+    IF current_width < CANISTER_MIN_WIDTH THEN // 완전히 닫혔다면 물체를 놓친 것
+        Return FALSE
+    END IF
+    
+    // 방법 2: 힘/토크 센서 확인 (고급 기능)
+    // current_force = gripper.Get_Applied_Force()
+    // IF current_force < MIN_GRASP_FORCE THEN
+    //     Return FALSE
+    // END IF
+    
+    Return TRUE
+
+END Function

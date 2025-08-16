@@ -1,0 +1,114 @@
+상위 레벨 (High-Level): MoveIt으로부터 궤적을 받아 실행을 명령하고 모니터링하는 부분
+
+하위 레벨 (Low-Level): ros2_control 내부에서 실시간으로 돌아가는 제어 루프
+
+
+
+
+상위 레벨: 궤적 실행 명령 및 모니터링
+메인 프로그램에서 MoveIt의 경로 계획이 성공한 직후에 호출됩니다.
+
+// --- 사전 설정 (Pre-Configuration) ---
+Define robot_arm = MoveIt2_Control_Interface()
+Define joint_trajectory_controller = ros2_control.Get_Controller("joint_trajectory_controller")
+
+
+// --- 메인 실행 함수 (Main Execution Function) ---
+// 입력: MoveIt이 성공적으로 생성한 'planned_trajectory'
+Function Execute_Planned_Trajectory(planned_trajectory)
+
+    // 1. 궤적 유효성 검사
+    //-------------------------------------------------
+    IF planned_trajectory is EMPTY or NULL THEN
+        Print("오류: 실행할 궤적이 유효하지 않습니다.")
+        Return FAILURE
+    END IF
+    
+    // 2. 궤적 실행 명령
+    //-------------------------------------------------
+    Print("1. Joint Trajectory Controller에 계획된 궤적을 전달합니다.")
+    joint_trajectory_controller.Set_Goal(planned_trajectory)
+    
+    // 3. 실행 완료 모니터링
+    //-------------------------------------------------
+    Print("2. 궤적 실행이 완료될 때까지 대기합니다...")
+    WHILE joint_trajectory_controller.Is_Execution_Done() is FALSE
+
+        // 현재 로봇 상태를 피드백 받거나 로그를 출력할 수 있음
+        current_feedback = joint_trajectory_controller.Get_Feedback()
+        Print("실행 중... 현재 오차: ", current_feedback.error)
+        
+        // Timeout 또는 외부 중단 신호 확인
+        IF Has_Timeout_Occurred() OR Received_Stop_Signal() THEN
+            Print("경고: 시간 초과 또는 외부 신호로 실행을 중단합니다.")
+            joint_trajectory_controller.Cancel_Execution()
+            Return FAILURE
+        END IF
+        
+        Sleep(100ms) // 0.1초마다 상태 확인
+
+    END IF
+    
+    // 4. 최종 결과 확인
+    //-------------------------------------------------
+    IF joint_trajectory_controller.Get_Result() is SUCCESS THEN
+        Print("3. 궤적 실행이 성공적으로 완료되었습니다!")
+        Return SUCCESS
+    ELSE
+        Print("오류: 궤적 실행에 실패했습니다.")
+        Return FAILURE
+    END IF
+
+END Function
+
+
+
+하위 레벨: 실시간 PID 제어 루프
+ ros2_control 프레임워크와 하드웨어 드라이버 내부에서 매우 빠른 주기(예: 1ms, 1000Hz)로 계속해서 반복 실행되는 핵심 로직입니다.
+
+ // --- 제어기 내부 설정 (Controller Internals) ---
+Define control_frequency = 1000 // Hz
+Define control_period = 1 / control_frequency // 0.001초 (1ms)
+
+Define joint_controllers[NUM_OF_JOINTS] // 각 관절별 PID 제어기 배열
+
+
+// --- 실시간 제어 루프 (Real-time Control Loop) ---
+// 이 함수는 시스템 시작과 함께 백그라운드에서 무한히 실행됨
+Function Realtime_Control_Loop()
+
+    WHILE System_is_Running()
+    
+        // -- 1. 읽기 (Read) --
+        // 실제 로봇 하드웨어로부터 현재 모든 관절의 상태(각도, 속도)를 읽어옴
+        current_joint_states = hardware_interface.Read_From_Robot()
+        
+        // -- 2. 목표값 계산 (Update Setpoint) --
+        // Joint Trajectory Controller가 현재 시간에 해당하는 목표 궤적 포인트를 계산
+        trajectory_setpoint = joint_trajectory_controller.Get_Setpoint_for_Current_Time()
+        
+        // -- 3. 제어 명령 계산 (Compute) --
+        FOR each joint_index from 1 to NUM_OF_JOINTS
+        
+            // 현재 각도와 목표 각도의 오차 계산
+            error = trajectory_setpoint.position[joint_index] - current_joint_states.position[joint_index]
+            
+            // 해당 관절의 PID 제어기가 오차를 바탕으로 제어 명령(힘/토크) 계산
+            control_command = joint_controllers[joint_index].Compute_PID(error)
+            
+            // 계산된 명령을 배열에 저장
+            output_commands[joint_index] = control_command
+            
+        END FOR
+        
+        // -- 4. 쓰기 (Write) --
+        // 계산된 모든 관절의 제어 명령을 실제 로봇 하드웨어로 한 번에 전송
+        hardware_interface.Write_To_Robot(output_commands)
+        
+        // -- 5. 주기 유지 (Sleep) --
+        // 다음 루프까지 정확히 1ms를 기다려 일정한 제어 주기를 유지
+        Sleep_Until_Next_Cycle(control_period)
+
+    END WHILE
+
+END Function
